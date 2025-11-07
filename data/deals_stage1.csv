@@ -1,0 +1,9 @@
+deal_id,client,target_demo,I_d,J_d,CPM_d,priority,channel_pref,weekday_focus
+D1,Retail_A,F18-34,60,10,1.3,high,C1,Mon-Tue
+D2,Auto_B,M25-54,55,8,1.1,medium,C1,Mon-Wed
+D3,Telecom_C,P25-54,80,12,1.6,high,C1-2,Mon-Thu
+D4,FMCG_D,F18-34,40,7,1.2,low,C2,Tue-Thu
+D5,Finance_E,M25-54,45,6,1.5,high,C2,Wed-Thu
+D6,Streaming_F,F18-34,30,5,1.0,medium,C1,Mon-Thu
+D7,Travel_G,P25-54,50,8,1.4,medium,C1-2,Mon-Thu
+D8,Insurance_H,M25-54,35,5,1.3,low,C2,Mon-Thu
