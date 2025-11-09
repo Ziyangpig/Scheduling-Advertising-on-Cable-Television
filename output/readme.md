@@ -40,3 +40,57 @@ advertiser	string	广告主名称。
 brand	string	品牌名称。
 category	string	品牌所属品类。
 status	string	Scheduled (已排期) 或 Binned (放入回收站，未排期)。
+
+
+Stage 3：时段内广告排序优化
+
+Stage 3 的作用是在 Stage 2 已经确定广告所属的时段（break）之后，为每个时段内部的广告生成 播放顺序（第几条播）。
+如果同一时段内存在 A-position / Z-position / Piggyback / Sandwich 等特殊要求，本阶段会自动处理这些约束。
+
+------------------------------------------------------------
+输入文件（来自前一阶段和基础数据）
+------------------------------------------------------------
+
+文件名                  说明                                   来源
+stage2_schedule.csv     每个广告被分配到哪个 break              Stage 2 输出
+deals_stage2.csv        广告属性及特殊标记（A/Z、piggyback、sandwich） 数据输入
+ratings_stage2.csv      break × 目标人群收视率                  数据输入
+stage1_weights.csv      合约重要性权重 W_d                      Stage 1 输出
+
+文件放置位置：
+./data/deals_stage2.csv
+./data/ratings_stage2.csv
+./output/stage1_weights.csv
+./output/stage2_schedule.csv
+
+------------------------------------------------------------
+输出文件
+------------------------------------------------------------
+
+stage3_positions.csv：每个广告在其所属 break 内的播放位置（第几条），或是否被 BIN
+
+示例：
+break_id,ad_id,position
+B12,Ad6,1
+B12,Ad47,2
+B12,Ad5,3
+B12,Ad3,BIN
+
+------------------------------------------------------------
+运行方式
+------------------------------------------------------------
+
+运行：
+python stage3.py
+
+输出文件：
+./output/stage3_positions.csv  广告位置
+./output/final_playlist.csv  最终播放列表
+
+------------------------------------------------------------
+说明
+------------------------------------------------------------
+
+- Stage 3 不改变广告属于哪个 break，只决定 break 内广告播放顺序。
+- 若某 break 内约束无法同时满足，广告会被标记为 BIN（不播）。
+- 输出可直接用于进一步生成最终播放单（Playlist）。
