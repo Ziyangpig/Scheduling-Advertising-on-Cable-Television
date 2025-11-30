@@ -18,6 +18,7 @@ import pandas as pd
 import pyomo.environ as pyo
 from collections import defaultdict
 import random
+import json
 
 # --- 1. 安装依赖 (每次会话都需要) ---
 print("STEP 1: 正在安装 COIN-OR CBC 求解器和 Pyomo...")
@@ -43,11 +44,13 @@ def create_stage2_input_files_from_real_stage1():
 
     # 读取您上传的 stage1_weights.csv 来获取 deal 列表
     try:
-        df_weights_uploaded = pd.read_csv('/content/output/stage1_weights.csv')
-        deal_ids_from_stage1 = df_weights_uploaded['deal_id'].unique().tolist()
-        print(f"成功读取到 Stage 1 的 Deal IDs: {deal_ids_from_stage1}")
+        df_weights_uploaded = pd.read_csv('output/stage1_weights.csv')
+        # 按照 'W_d' 权重降序排序，并获取最高的250个deal
+        top_250_deals = df_weights_uploaded.sort_values(by='W_d', ascending=False).head(250)
+        deal_ids_from_stage1 = top_250_deals['deal_id'].unique().tolist()
+        print(f"成功读取到 Stage 1 权重最高的 {len(deal_ids_from_stage1)} 个 Deal IDs")
     except FileNotFoundError:
-        print("错误：无法找到 /content/output/stage1_weights.csv。请确保您已正确上传该文件。")
+        print("错误：无法找到 output/stage1_weights.csv。请确保您已正确上传该文件。")
         return False
 
     # a. 创建 deals_stage2.csv (当日待播广告的详细信息)
@@ -56,57 +59,137 @@ def create_stage2_input_files_from_real_stage1():
     deals_base = {
         deal_id: {
             'target_demo': random.choice(['F18-34', 'M25-54', 'P25-54']),
-            'advertiser': f'ADV{random.randint(1, 4)}',
-            'brand': f'Brand{chr(65 + i)}', # BrandA, BrandB, etc.
-            'category': f'Cat{random.choice(["X", "Y", "Z"])}'
+            'advertiser': f'ADV{random.randint(1, 5)}',
+            'brand': f'Brand{random.randint(1, 10)}', # BrandA, BrandB, etc.
+            'category': f'Cat{random.randint(1, 5)}'
         } for i, deal_id in enumerate(deal_ids_from_stage1)
     }
 
-    ad_counter = 1
-    for deal_id, props in deals_base.items():
-        for _ in range(random.randint(5, 10)): # 每个deal当天有5-10条广告
+    deal_ids_list = list(deals_base.keys())
+
+    if not deal_ids_list:
+        print("警告: Stage 1 中没有有效的 deal_id，无法生成广告。")
+    else:
+        # 为每个 deal 创建一个广告
+        for ad_counter, deal_id in enumerate(deal_ids_list, 1):
+            props = deals_base[deal_id]
             ads_data.append({
-                'ad_id': f'Ad{ad_counter}', 'deal_id': deal_id,
-                'length_sec': random.choice([15, 30, 60]),
-                'target_demo': props['target_demo'], 'advertiser': props['advertiser'],
-                'brand': props['brand'], 'category': props['category']
+                'ad_id': f'Ad{ad_counter}',
+                'deal_id': deal_id,
+                'length_sec': 30,
+                'target_demo': props['target_demo'],
+                'advertiser': props['advertiser'],
+                'brand': props['brand'],
+                'category': props['category']
             })
-            ad_counter += 1
 
     # 随机添加一些特殊约束的广告以测试模型的完整性
     if len(ads_data) > 12:
-        ads_data[5]['is_A_pos'] = True
-        ads_data[6]['is_Z_pos'] = True
+        # ads_data[5]['is_A_pos'] = True # A-Pos约束在模型中已注释，故此处也注释掉
+        # ads_data[6]['is_Z_pos'] = True # Z-Pos约束在模型中已注释，故此处也注释掉
         ads_data[7]['piggyback_with'] = f'Ad{9}'
         ads_data[8]['piggyback_with'] = f'Ad{8}'
         ads_data[10]['sandwich_with'] = f'Ad{12}'
         ads_data[11]['sandwich_with'] = f'Ad{11}'
 
     ads_df = pd.DataFrame(ads_data)
-    # ads_df.to_csv('/content/data/deals_stage2.csv', index=False)
-    # print(" -> /content/data/deals_stage2.csv 创建成功")
+    # df_final_output.to_csv(output_path, index=False, encoding='utf-8-sig')
+    ads_df.to_csv('data/deals_stage2.csv', index=False)
+    print(" -> data/deals_stage2.csv 创建成功")
 
     # b. 创建 breaks_stage2.csv (当日的广告时段库存)
     breaks_data = []
-    for i in range(1, 21): # 假设当天有20个时段
-        breaks_data.append({
-            'break_id': f'B{i}', 'length_sec': 1200,
-            'start_minute_F_b': 480 + (i-1) * 20,
-            'hour': 8 + ((i-1)*20 // 60)
-        })
-    breaks_df = pd.DataFrame(breaks_data)
-    # breaks_df.to_csv('/content/data/breaks_stage2.csv', index=False)
-    # print(" -> /content/data/breaks_stage2.csv 创建成功")
+    break_counter = 1
+    # 当天24小时都在放，大约每小时一个 break
+    current_minute = 0
+    end_minute = 24 * 60
 
-    # c. 创建 ratings_stage2.csv (当日的预测收视率)
-    ratings_data = []
-    demos = ['F18-34', 'M25-54', 'P25-54']
-    for b in breaks_df['break_id']:
-        for demo in demos:
-            ratings_data.append({ 'break_id': b, 'demo_id': demo, 'rating': round(random.uniform(0.5, 3.0), 2) })
-    ratings_df = pd.DataFrame(ratings_data)
-    # ratings_df.to_csv('/content/data/ratings_stage2.csv', index=False)
-    # print(" -> /content/data/ratings_stage2.csv 创建成功")
+    while current_minute < end_minute:
+        # 每个 break 持续 5-7 分钟不等 (增加时长以确保容量充足)
+        length_seconds = random.randint(5 * 60, 7 * 60)
+
+        breaks_data.append({
+            'break_id': f'B{break_counter}',
+            'length_sec': length_seconds,
+            'start_minute_F_b': current_minute,
+            'hour': current_minute // 60
+        })
+
+        break_counter += 1
+        # 下一个 break 大约在当前 break 结束后 55-65 分钟
+        current_minute += random.randint(55, 65)
+    breaks_df = pd.DataFrame(breaks_data)
+    breaks_df.to_csv('data/breaks_stage2.csv', index=False)
+    print(" -> data/breaks_stage2.csv 创建成功")
+
+    # c. 创建 ratings_stage2.csv (根据 xgboost.csv 最后一天的数据)
+    print(" -> 正在根据 xgboost.csv 创建 ratings_stage2.csv...")
+    try:
+        # 1. 读取 xgboost.csv 数据
+        df_xgboost = pd.read_csv('xgboost.csv')
+
+        # 2. 找到最后一天的日期
+        df_xgboost['date'] = pd.to_datetime(df_xgboost['date'])
+        last_date = df_xgboost['date'].max()
+
+        # 3. 筛选出最后一天的收视率预测数据
+        df_last_day = df_xgboost[df_xgboost['date'] == last_date].copy()
+
+        # 4. 将时间 'HH:MM' 转换为分钟数
+        time_parts = df_last_day['time'].str.split(':', expand=True)
+        df_last_day['minutes_from_midnight'] = time_parts[0].astype(int) * 60 + time_parts[1].astype(int)
+
+        # 5. 为每个 break 找到最接近的收视率
+        ratings_data = []
+        demos = ['F18-34', 'M25-54', 'P25-54']
+
+        # 创建一个从分钟到预测收视率的映射，并删除重复分钟的记录以确保idxmin()正常工作
+        df_last_day = df_last_day.drop_duplicates(subset=['minutes_from_midnight'])
+        rating_map = df_last_day.set_index('minutes_from_midnight')['y_pred']
+
+        for index, row in breaks_df.iterrows():
+            break_id = row['break_id']
+            start_minute = row['start_minute_F_b']
+
+            # 找到时间上最接近的收视率记录的索引
+            # .to_series() 将Index转换为Series，使其支持 .abs() 方法
+            closest_minute_index = (rating_map.index.to_series() - start_minute).abs().idxmin()
+            rating_value = rating_map.loc[closest_minute_index]
+
+            for demo in demos:
+                ratings_data.append({
+                    'break_id': break_id,
+                    'demo_id': demo,
+                    'rating': round(rating_value, 2) # 使用找到的收视率
+                })
+
+        ratings_df = pd.DataFrame(ratings_data)
+        ratings_df.to_csv('data/ratings_stage2.csv', index=False)
+        print(" -> data/ratings_stage2.csv 创建成功 (数据来源: xgboost.csv)")
+
+    except FileNotFoundError:
+        print("错误：无法找到 xgboost.csv。将使用随机数据生成 ratings_stage2.csv。")
+        # Fallback to original random generation if file not found
+        ratings_data = []
+        demos = ['F18-34', 'M25-54', 'P25-54']
+        for b in breaks_df['break_id']:
+            for demo in demos:
+                ratings_data.append({ 'break_id': b, 'demo_id': demo, 'rating': round(random.uniform(0.5, 3.0), 2) })
+        ratings_df = pd.DataFrame(ratings_data)
+        ratings_df.to_csv('data/ratings_stage2.csv', index=False)
+        print(" -> data/ratings_stage2.csv (随机数据) 创建成功")
+    # --- 容量检查 ---
+    total_ad_duration = ads_df['length_sec'].sum()
+    total_break_duration = breaks_df['length_sec'].sum()
+    print("\n--- 容量检查 ---")
+    print(f"所有广告的总时长: {total_ad_duration / 60:.2f} 分钟")
+    print(f"所有时段的总容量: {total_break_duration / 60:.2f} 分钟")
+
+    if total_ad_duration > total_break_duration:
+        print("❌ 错误：广告总时长超过了可用时段的总容量。模型必定无解。请调整数据生成参数。")
+        return False # 返回 False 阻止后续求解
+
+    print("✅ 容量检查通过。")
     return True
 
 # --- 执行文件创建 ---
@@ -124,17 +207,17 @@ print("正在加载和预处理数据...")
 
 # --- 1. 加载所有CSV文件 ---
 try:
-    df_weights = pd.read_csv('/content/output/stage1_weights.csv')
-    df_xdb = pd.read_csv('/content/output/stage1_xdb.csv')
+    df_weights = pd.read_csv('output/stage1_weights.csv')
+    
     print("成功加载您上传的 Stage 1 输出文件。")
 except FileNotFoundError as e:
-    print(f"错误: 无法找到文件 {e.filename}。请确保您已正确上传文件到 /content/output/ 目录。")
+    print(f"错误: 无法找到文件 {e.filename}。请确保您已正确上传文件到 output/ 目录。")
     # 如果文件不存在，停止执行，防止后续代码出错
     raise e
 
-df_ads = pd.read_csv('/content/data/deals_stage2.csv')
-df_breaks = pd.read_csv('/content/data/breaks_stage2.csv')
-df_ratings = pd.read_csv('/content/data/ratings_stage2.csv')
+df_ads = pd.read_csv('data/deals_stage2.csv')
+df_breaks = pd.read_csv('data/breaks_stage2.csv')
+df_ratings = pd.read_csv('data/ratings_stage2.csv')
 print("成功加载 Stage 2 的当日详细数据文件。")
 
 
@@ -166,33 +249,52 @@ z_pos_ads = {ad for ad, props in ads_data.items() if props.get('is_Z_pos')}
 piggyback_pairs = {(ad, props['piggyback_with']) for ad, props in ads_data.items() if pd.notna(props.get('piggyback_with')) and ad < props['piggyback_with']}
 sandwich_pairs = {(ad, props['sandwich_with']) for ad, props in ads_data.items() if pd.notna(props.get('sandwich_with')) and ad < props['sandwich_with']}
 
-# e. 构建初始排期表 (Warm Start) - 【新逻辑】
-# 完全基于您上传的 stage1_xdb.csv 文件
-print("正在根据您上传的 stage1_xdb.csv 生成初始排期表 (Warm Start)...")
+# e. 构建初始排期表 (Warm Start) - 【新逻辑：高权重Deal优先高收视率Break】
+print("正在根据Deal权重和Break收视率生成初始排期表 (Warm Start)...")
+
+# 1. 对广告按Deal权重排序
+df_ads_with_weights = pd.merge(df_ads, df_weights, on='deal_id', how='left')
+sorted_ads = df_ads_with_weights.sort_values(by='W_d', ascending=False)['ad_id'].tolist()
+
+# 2. 对Break按平均收视率排序
+df_ratings_avg = df_ratings.groupby('break_id')['rating'].mean().reset_index()
+df_breaks_with_ratings = pd.merge(df_breaks, df_ratings_avg, on='break_id', how='left')
+# 填充可能没有评级的break，避免排序失败
+df_breaks_with_ratings['rating'] = df_breaks_with_ratings['rating'].fillna(0)
+sorted_breaks = df_breaks_with_ratings.sort_values(by='rating', ascending=False)
+
+# 3. 贪心算法分配广告
 initial_schedule = {}
-temp_xdb = df_xdb.rename(columns={'x_db': 'num_ads'}) # 兼容您的列名
-temp_xdb_expanded = temp_xdb.loc[temp_xdb.index.repeat(temp_xdb.num_ads)].reset_index(drop=True)
-ads_by_deal = df_ads.groupby('deal_id')['ad_id'].apply(list)
+break_capacity_used = {b: 0 for b in breaks_list}
+breaks_queue = sorted_breaks[['break_id', 'length_sec']].to_dict('records')
 
-for deal_id, ads_in_deal in ads_by_deal.items():
-    breaks_for_deal = temp_xdb_expanded[temp_xdb_expanded['deal_id'] == deal_id]['break_id'].tolist()
-    if not breaks_for_deal: # 如果某个deal在xdb中没有记录
-        print(f"警告：Deal {deal_id} 在 stage1_xdb.csv 中没有找到排期，将为其随机分配初始时段。")
-        breaks_for_deal = random.choices(breaks_list, k=len(ads_in_deal))
-
-    if len(breaks_for_deal) < len(ads_in_deal):
-        breaks_for_deal *= (len(ads_in_deal) // len(breaks_for_deal) + 1)
-
-    for ad_id, break_id in zip(ads_in_deal, breaks_for_deal):
-        if break_id not in breaks_list: # 如果Stage1的时段不在今天的库存里
-            initial_schedule[ad_id] = random.choice(breaks_list)
+for ad_id in sorted_ads:
+    ad_length = ads_data[ad_id]['length_sec']
+    assigned = False
+    for break_info in breaks_queue:
+        b_id = break_info['break_id']
+        b_len = break_info['length_sec']
+        if b_len - break_capacity_used[b_id] >= ad_length:
+            initial_schedule[ad_id] = b_id
+            break_capacity_used[b_id] += ad_length
+            assigned = True
+            break
+    
+    if not assigned:
+        available_breaks = [b for b in breaks_list if breaks_data[b]['length_sec'] - break_capacity_used[b] >= ad_length]
+        if available_breaks:
+            chosen_break = random.choice(available_breaks)
+            initial_schedule[ad_id] = chosen_break
+            break_capacity_used[chosen_break] += ad_length
         else:
-            initial_schedule[ad_id] = break_id
+            initial_schedule[ad_id] = random.choice(breaks_list)
 
-# 再次检查，确保所有广告都有初始位置
+# 确保所有广告都有初始位置
 for ad_id in ads_list:
     if ad_id not in initial_schedule:
         initial_schedule[ad_id] = random.choice(breaks_list)
+
+print("✅ 新的 Warm Start 排期表生成完毕。")
 
 # f. 聚合数据用于模型
 model_data = {
@@ -212,7 +314,7 @@ print("\n✅ 数据加载和预处理完成。")
 # ==============================================================================
 import pyomo.environ as pyo
 
-def solve_stage2_full_model(data, Mmove_percent=0.5, PB=0.1, PA=0.1, PV=0.1):
+def solve_stage2_full_model(data, solver, Mmove_percent=0.5, PB=0.1, PA=0.1, PV=0.1):
     """
     使用 Pyomo 构建并求解 Stage 2 的完整 MIP 模型
     PB, PA, PV 是均匀分布约束的惩罚系数
@@ -340,8 +442,6 @@ def solve_stage2_full_model(data, Mmove_percent=0.5, PB=0.1, PA=0.1, PV=0.1):
     print("\n--- 正在求解模型 (这可能需要一些时间) ---")
 
     # --- 6. 求解 ---
-    solver = pyo.SolverFactory('cbc')
-    solver.options['seconds'] = 60 # 设置60秒超时
     results = solver.solve(model, tee=True)
 
     return model, results
@@ -360,11 +460,19 @@ try:
 except NameError:
     print("错误：'model_data' 未定义。请确保您已按顺序运行了前面的所有代码单元格。")
 else:
-    model, results = solve_stage2_full_model(model_data, Mmove_percent=0.7)
+    # 创建并配置求解器
+    solver = pyo.SolverFactory('cbc')
+  #  solver.options['seconds'] = 1800  # 增加求解时间到30分钟
+    solver.options['ratio'] = 0.01  # 设置目标Gap为1%
+
+    # 传递solver给求解函数
+    model, results = solve_stage2_full_model(model_data, solver, Mmove_percent=0.7)
 
     # --- 2. 格式化并打印结果 ---
     print("\n--- 最终结果 ---")
-    if (results.solver.status == pyo.SolverStatus.ok) and (results.solver.termination_condition in [pyo.TerminationCondition.optimal, pyo.TerminationCondition.feasible]):
+    # 接受 'optimal'（最优）、'feasible'（可行）以及 'maxTimeLimit'（超时但有解）的终止条件
+    # 同时放宽对求解器状态的检查，因为超时中止时状态可能是 'aborted' 或 'warning'
+    if results.solver.termination_condition in [pyo.TerminationCondition.optimal, pyo.TerminationCondition.feasible, pyo.TerminationCondition.maxTimeLimit]:
         if results.solver.termination_condition == pyo.TerminationCondition.optimal:
             print(f"✅ 状态: 找到最优解")
         else:
@@ -420,7 +528,7 @@ else:
             df_schedule_output = pd.DataFrame(output_list)
 
             # (可选，但推荐) 关联原始广告信息，让输出文件内容更丰富
-            df_ads_info = pd.read_csv('/content/data/deals_stage2.csv')
+            df_ads_info = pd.read_csv('data/deals_stage2.csv')
             df_final_output = pd.merge(df_schedule_output, df_ads_info, on='ad_id', how='left')
 
             # 调整列顺序并排序，方便查看
@@ -432,7 +540,48 @@ else:
 
             # 保存到 CSV
             output_path = os.path.join(output_dir, 'stage2_schedule.csv')
-            # df_final_output.to_csv(output_path, index=False, encoding='utf-8-sig')
+            df_final_output.to_csv(output_path, index=False, encoding='utf-8-sig')
+            print(f" -> ✅ 排期结果已保存到 {output_path}")
+
+            # --- 保存详细求解结果到 JSON ---
+            print(" -> 正在保存求解结果到 output/solver_results.json...")
+            try:
+                objective_value = pyo.value(model.objective)
+                solver_stats = results.solver.statistics
+                upper_bound = results.problem[0].upper_bound
+                # 确保 objective_value 不为零以避免除零错误
+                if objective_value and upper_bound and abs(objective_value) > 1e-6:
+                    gap = (upper_bound - objective_value) / abs(objective_value)
+                else:
+                    gap = None
+
+                results_to_save = {
+                    "solver_status": str(results.solver.status),
+                    "termination_condition": str(results.solver.termination_condition),
+                    "objective_value": objective_value,
+                    "upper_bound": upper_bound,
+                    "gap": gap,
+                    "enumerated_nodes": getattr(solver_stats.branch_and_bound, 'nodes', 'N/A'),
+                    "total_iterations": getattr(solver_stats.branch_and_bound, 'iterations', 'N/A'),
+                    "cpu_time_seconds": results.solver.time,
+                    "wallclock_time_seconds": results.solver.wallclock_time,
+                    "schedule": {b: sorted(ads) for b, ads in new_schedule.items()},
+                    "binned_ads": sorted(binned_ads),
+                }
+            except (AttributeError, IndexError) as e:
+                print(f" -> 警告：无法提取部分求解器统计信息 ({e})。将保存基本结果。")
+                results_to_save = {
+                    "solver_status": str(results.solver.status),
+                    "termination_condition": str(results.solver.termination_condition),
+                    "objective_value": pyo.value(model.objective),
+                    "schedule": {b: sorted(ads) for b, ads in new_schedule.items()},
+                    "binned_ads": sorted(binned_ads),
+                }
+
+            json_output_path = os.path.join(output_dir, 'solver_results.json')
+            with open(json_output_path, 'w', encoding='utf-8') as f:
+                json.dump(results_to_save, f, ensure_ascii=False, indent=4)
+            print(" -> ✅ 结果已保存。")
 
     else:
         print(f"❌ 求解失败或未找到可行解。")

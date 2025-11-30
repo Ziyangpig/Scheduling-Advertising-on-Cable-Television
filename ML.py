@@ -641,7 +641,7 @@ def main():
     # 5. 可视化结果
     print("\n5. 生成预测可视化...")
     sample_demos = list(forecasts.keys())[:min(4, len(forecasts))]
-    '''
+    print(forecasts)
     plt.figure(figsize=(15, 10))
        
     
@@ -677,7 +677,7 @@ def main():
     plt.tight_layout()
     plt.savefig('ratings_forecast_results.png', dpi=300, bbox_inches='tight')
     plt.show()
-    '''
+    
     
     # 6. 输出预测统计
     print("\n6. 预测结果统计:")
