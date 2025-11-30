@@ -60,3 +60,45 @@ Stage 1 求解完成后，会在 `output/` 目录下生成两个 CSV 文件，�
 output/
 ├─ stage1_weights.csv  # 每个 deal 的权重 W_d 和未满足曝光 y_d
 └─ stage1_xdb.csv      # 一周粗排结果：x_{d,b}
+
+Stage 3：时段内广告排序（In-Break Positioning）README
+
+1.角色：在 Stage 2 已经把“每条广告分配到哪一个 break（时段）”的基础上，Stage 3 负责决定每个 break 内部的广告播放顺序（slot 1/2/3/…），并在必要时把个别广告放入回收
+
+2. 运行前准备
+
+确保已完成 Stage 1 与 Stage 2，并生成如下文件：
+
+来自 Stage 2（输出）
+
+output/stage2_schedule.csv
+
+列：break_id, ad_id, deal_id, length_sec, target_demo, advertiser, brand, category, status
+
+用于确定每个广告属于哪个 break（status == "Scheduled" 的才进入 Stage 3）
+
+来自 Stage 1（输出）
+
+output/stage1_weights.csv
+
+列：deal_id, W_d, y_d
+
+用于获取合约权重 W_d
+
+当日运营数据（输入 / data 目录）
+
+data/deals_stage2.csv
+
+列（至少）：ad_id, deal_id, length_sec, target_demo, advertiser, brand, category
+
+可选列（若存在会自动生效）：is_A_pos, is_Z_pos, piggyback_with, sandwich_with
+
+data/ratings_stage2.csv
+
+列：break_id, demo_id, rating （会在脚本内重命名为 target_demo 对齐）
+
+data/breaks_stage2.csv
+
+列：break_id, length_sec, start_minute_F_b, hour
+
+start_minute_F_b：从 00:00 起算的分钟数，用于计算每条广告在一天内的绝对播出时间
